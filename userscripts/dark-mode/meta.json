@@ -1,0 +1,11 @@
+{
+  "outputs": [
+    "/Users/Nathaniel/Code/userscripts/Dark Mode.js"
+  ],
+  "userscriptProperties": {
+    "@name": "Dark Mode",
+    "@description": "This is your new file, start writing code",
+    "@match": "*://*.*",
+    "@inject-into": "auto"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "userscript-bundler",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "build": "node ./scripts/build.js",
+    "watch": "node ./scripts/watch.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "color": "^3.1.2"
+  },
+  "devDependencies": {
+    "core-js": "^3.8.3",
+    "parcel": "^1.12.4",
+    "recursive-readdir": "^2.2.2",
+    "regenerator-runtime": "^0.13.7"
+  }
+}
