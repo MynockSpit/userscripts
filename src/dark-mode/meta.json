@@ -1,8 +1,4 @@
 {
-  "outputs": [
-    "~/workspace/userscripts/bin/Dark Mode.js"
-  ],
-  "localBuild": true,
   "userscriptProperties": {
     "@name": "Dark Mode",
     "@description": "This is your new file, start writing code",
