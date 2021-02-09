@@ -77,7 +77,11 @@ function writeFile(bundle) {
       let metadataBlock = ['// ==UserScript==']
 
       Object.entries(meta.userscriptProperties).forEach(([key, value]) => {
-        metadataBlock.push(`// ${key}  ${value}`)
+        if (key === '@name' && !isBuild) {
+          metadataBlock.push(`// ${key}  ${value} [local]`)
+        } else {
+          metadataBlock.push(`// ${key}  ${value}`)
+        }
       })
 
       metadataBlock.push(
