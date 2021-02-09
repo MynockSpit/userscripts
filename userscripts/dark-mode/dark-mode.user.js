@@ -52,24 +52,27 @@ async function darkenViaSheets() {
   let atLeastOneFailure = false
 
   Array.from(document.styleSheets).forEach(sheet => {
-    if (sheet.cssRules === null) {
+    try {
+      recurseAndFixRules(sheet.cssRules)
+
+      if (sheet.cssRules === null) {
+        throw new Error("Can't read stylesheet.")
+      }
+    } catch (e) {
       nullSheets.push(fetch(sheet.href)
         .then(async response => {
           let text = await response.text()
 
-          sheet.ownerNode.parentElement.removeChild(sheet.ownerNode)
 
-          let newSheet = createSheet(text)
+          let newSheet = createSheet(text, sheet.ownerNode)
           recurseAndFixRules(newSheet.cssRules)
         })
         .catch((reason) => {
           atLeastOneFailure = true
           console.warn(reason)
-        })
+        }) 
       )
     }
-
-    recurseAndFixRules(sheet.cssRules)
   })
 
   await Promise.all(nullSheets)
@@ -77,10 +80,16 @@ async function darkenViaSheets() {
   return atLeastOneFailure
 }
 
-function createSheet(text) {
+function createSheet(text, replace) {
   let style = document.createElement('style')
   style.innerHTML = text
-  document.head.appendChild(style)
+  style.setAttribute('created-by-me', 'true')
+  if (replace) {
+    replace.insertAdjacentElement('afterend', style)
+    replace.parentElement.removeChild(replace)
+  } else {
+    document.head.appendChild(style)
+  }
   return style.sheet
 }
 
@@ -98,7 +107,6 @@ function ensureBackgroundIsDark() {
 function recurseAndFixElements(useComputed = true, element = document.body.parentElement) {
   let style = useComputed ? getComputedStyle(element) : element.style
   let count = 0
-  console.log('styleToFix')
 
   Array.from(style).forEach(styleToFix => {
     if (stylesToFix.includes(styleToFix)) {

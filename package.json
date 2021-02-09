@@ -4,8 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "build": "node ./scripts/build.js",
-    "watch": "node ./scripts/watch.js"
+    "build": "NODE_ENV=production node ./scripts/bundle.js",
+    "watch": "node ./scripts/bundle.js"
   },
   "keywords": [],
   "author": "",

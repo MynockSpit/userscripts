@@ -2,7 +2,7 @@ const Bundler = require('parcel');
 const fs = require('fs');
 const nodePath = require('path');
 const recursive = require("recursive-readdir");
-
+const os = require('os')
 
 function getEntryFiles() {
   let entryFiles = []
@@ -10,7 +10,7 @@ function getEntryFiles() {
   return new Promise(resolve => {
     recursive(nodePath.join(__dirname, '../userscripts'), (err, files) => {
       files.forEach(file => {
-        if (file.endsWith('.user.js')) {
+        if (file.endsWith('.user.js') && !file.endsWith('build.user.js')) {
           entryFiles.push(file)
         }
       })
@@ -20,25 +20,18 @@ function getEntryFiles() {
   })
 }
 
-
-async function bundleUserScripts(entryFiles, options = {}) {
+async function bundleUserScripts(entryFiles) {
   // Initializes a bundler using the entrypoint location and options provided
   if (!entryFiles) {
     entryFiles = await getEntryFiles()
   }
 
-  console.log(entryFiles)
-
-  const bundler = new Bundler(entryFiles, {
-    watch: false,
-    ...options,
-  });
+  const bundler = new Bundler(entryFiles);
 
   const bundle = await bundler.bundle();
 
-  bundler.on('buildEnd', () => {
-    console.log(arguments)
-    writeFile()
+  bundler.on('buildEnd', (f) => {
+    writeFile(bundle)
   });
 
   writeFile(bundle)
@@ -51,6 +44,7 @@ function writeFile(bundle) {
   if (bundle.name) {
     files.push({
       output: bundle.name,
+      build: bundle.entryAsset.name.replace('.user', '.build.user'),
       meta: nodePath.dirname(bundle.entryAsset.name) + '/meta.json'
     })
 
@@ -58,6 +52,7 @@ function writeFile(bundle) {
     bundle.childBundles.forEach(childBundle => {
       files.push({
         output: childBundle.name,
+        build: childBundle.entryAsset.name.replace('.user', '.build.user'),
         meta: nodePath.dirname(childBundle.entryAsset.name) + '/meta.json'
       })
     })
@@ -77,8 +72,14 @@ function writeFile(bundle) {
 
       metadataBlock.push('// ==/UserScript==')
 
-      meta.outputs.forEach(outputPath => {
-        fs.writeFileSync(outputPath, [
+      let outputs = []
+
+      // outputs.push(...meta.outputs)
+      outputs.push(userscripts.output)
+      if (meta.localBuild) outputs.push(userscripts.build)
+
+      outputs.forEach(outputPath => {
+        fs.writeFileSync(outputPath.replace(/^~/, os.homedir()), [
           ...metadataBlock,
           ` `,
           `(function() {`,
@@ -92,6 +93,4 @@ function writeFile(bundle) {
   return null
 }
 
-module.exports = {
-  bundle: bundleUserScripts
-}
+bundleUserScripts()
