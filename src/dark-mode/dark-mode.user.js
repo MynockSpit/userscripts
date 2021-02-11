@@ -19,8 +19,10 @@ const stylesToFix = new Set([
   'text-shadow',
 ])
 
-const lightenBy = 15;
-const darkenBy = 0;
+const lightenDarksBy = 15;
+const darkenLightsBy = 10;
+const uiHue = undefined;
+const fontHue = undefined;
 
 function exclude() {
   if (/facebook\.com/.test(window.location.href)) {
@@ -33,21 +35,18 @@ function exclude() {
 async function darken() {
   if (!exclude()) {
     let failed = await darkenViaSheets()
-    ensureBasicColors()
     parseVariableRules()
 
-    console.log({totalStylesFixed})
-
-    return
     if (!failed) {
       recurseAndFixElements(false)
     } else {
       console.debug('Failed to load some stylesheets; falling back to manual element changes.')
       recurseAndFixElements()
-      onDomChange(() => {
-        recurseAndFixElements()
-      })
     }
+
+    ensureBasicColors()
+
+    console.log({ totalStylesFixed })
   }
 }
 
@@ -58,7 +57,7 @@ async function darkenViaSheets() {
   Array.from(document.styleSheets).forEach(sheet => {
     try {
       // console.log(sheet)
-    } catch (e) {}
+    } catch (e) { }
 
     try {
       recurseAndFixRules(sheet.cssRules)
@@ -109,8 +108,10 @@ function ensureBasicColors() {
 
   html.style.backgroundColor = bgColor
     .alpha(1)
-    .lightness(bgColor.lightness() + lightenBy)
+    .lightness(bgColor.lightness() + targetDarkness)
     .string()
+
+  console.log(html.style.backgroundColor)
 
   let fontColor = Color(htmlStyle.color)
   if (fontColor.isDark()) {
@@ -241,7 +242,11 @@ function makeColor(style, value, isFont = undefined, debug = false) {
         color = Color(color)
         if (color.isDark()) {
           color = color.negate()
-          color = color.lightness(color.lightness() - darkenBy).string()
+          color = color.lightness(color.lightness() - darkenLightsBy)
+        }
+
+        if (fontHue) {
+          color = color.hue(fontHue)
         }
       }
 
@@ -250,11 +255,15 @@ function makeColor(style, value, isFont = undefined, debug = false) {
         color = Color(color)
         if (color.isLight()) {
           color = color.negate()
-          color = color.lightness(color.lightness() + lightenBy).string()
+          color = color.lightness(color.lightness() + lightenDarksBy)
+        }
+
+        if (uiHue) {
+          color = color.hue(uiHue)
         }
       }
 
-      return color
+      return color.string()
     }
   } catch (error) {
     if (debug) {
@@ -293,7 +302,14 @@ function fixStyle(target, style, value) {
       console.log(target, style, newValue)
     }
     target.style[style] = newValue
-    totalStylesFixed ++
+
+    // invert all background images
+    // this should mostly miss things like profile pictures, and hopefully just get ui elements... but we'll see
+    if (style === 'background-image' && value.startsWith('url(')) {
+      target.style.filter = `invert(1)`
+    }
+
+    totalStylesFixed++
     return true
   }
 
@@ -301,3 +317,7 @@ function fixStyle(target, style, value) {
 }
 
 darken()
+
+onDomChange(() => {
+  // darken()
+})

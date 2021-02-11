@@ -3,6 +3,7 @@
     "@name": "Dark Mode",
     "@description": "This is your new file, start writing code",
     "@match": "*://*.*",
-    "@inject-into": "auto"
+    "@inject-into": "auto",
+    "@grant": "GM_xmlhttpRequest"
   }
 }
