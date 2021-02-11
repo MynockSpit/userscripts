@@ -3,48 +3,52 @@ import "regenerator-runtime/runtime";
 import Color from 'color'
 import { onDomChange } from '../../lib/on-dom-change'
 
-const stylesToFix = [
+const stylesToFix = new Set([
   'color',
   'background-color',
+  'background-image',
   'background',
+  'border',
   'border-color',
   'border-top-color',
   'border-right-color',
   'border-bottom-color',
-  'border-left-color'
-]
-
-// background-image w/ gradients
-// box-shadows
-// border?
+  'border-left-color',
+  'outline',
+  'box-shadow',
+  'text-shadow',
+])
 
 const lightenBy = 15;
+const darkenBy = 0;
 
 function exclude() {
   if (/facebook\.com/.test(window.location.href)) {
     return true
   }
-  
+
   return false
 }
 
 async function darken() {
   if (!exclude()) {
-  let failed = await darkenViaSheets()
-  ensureBackgroundIsDark()
+    let failed = await darkenViaSheets()
+    ensureBasicColors()
+    parseVariableRules()
 
-  return
-  if (!failed) {
-    recurseAndFixElements(false)
-  } else {
-    console.debug('Failed to load some stylesheets; falling back to manual element changes.')
-    recurseAndFixElements()
-    onDomChange(() => {
+    console.log({totalStylesFixed})
+
+    return
+    if (!failed) {
+      recurseAndFixElements(false)
+    } else {
+      console.debug('Failed to load some stylesheets; falling back to manual element changes.')
       recurseAndFixElements()
-    })
+      onDomChange(() => {
+        recurseAndFixElements()
+      })
+    }
   }
-  }
-
 }
 
 async function darkenViaSheets() {
@@ -52,6 +56,10 @@ async function darkenViaSheets() {
   let atLeastOneFailure = false
 
   Array.from(document.styleSheets).forEach(sheet => {
+    try {
+      // console.log(sheet)
+    } catch (e) {}
+
     try {
       recurseAndFixRules(sheet.cssRules)
 
@@ -63,14 +71,14 @@ async function darkenViaSheets() {
         .then(async response => {
           let text = await response.text()
 
-
           let newSheet = createSheet(text, sheet.ownerNode)
+
           recurseAndFixRules(newSheet.cssRules)
         })
-        .catch((reason) => {
+        .catch(reason => {
           atLeastOneFailure = true
           console.warn(reason)
-        }) 
+        })
       )
     }
   })
@@ -93,15 +101,21 @@ function createSheet(text, replace) {
   return style.sheet
 }
 
-function ensureBackgroundIsDark() {
-  let htmlStyle = getComputedStyle(document.body.parentElement)
+function ensureBasicColors() {
+  let html = document.body.parentElement
+  let htmlStyle = getComputedStyle(html)
 
-  let color = Color(htmlStyle.backgroundColor)
+  let bgColor = Color(htmlStyle.backgroundColor)
 
-  document.body.parentElement.style.backgroundColor = color
+  html.style.backgroundColor = bgColor
     .alpha(1)
-    .lightness(color.lightness() + lightenBy)
+    .lightness(bgColor.lightness() + lightenBy)
     .string()
+
+  let fontColor = Color(htmlStyle.color)
+  if (fontColor.isDark()) {
+    html.style.color = 'white'
+  }
 }
 
 function recurseAndFixElements(useComputed = true, element = document.body.parentElement) {
@@ -109,12 +123,9 @@ function recurseAndFixElements(useComputed = true, element = document.body.paren
   let count = 0
 
   Array.from(style).forEach(styleToFix => {
-    if (stylesToFix.includes(styleToFix)) {
-      console.log(styleToFix)
-      let fixed = fixStyle(element, styleToFix, style[styleToFix])
-      if (count === 0 && fixed) {
-        count += 1
-      }
+    let fixed = fixStyle(element, styleToFix, style[styleToFix])
+    if (count === 0 && fixed) {
+      count += 1
     }
   })
 
@@ -127,9 +138,15 @@ function recurseAndFixElements(useComputed = true, element = document.body.paren
   return count
 }
 
+let variableRules = []
+
 function recurseAndFixRules(cssRules) {
   try {
     Array.from(cssRules).forEach(rule => {
+      if (/@media (prefers-color-scheme-dark)/.test(rule.cssText)) {
+        console.log(rule)
+        return
+      }
       if (rule.cssRules) {
         recurseAndFixRules(rule.cssRules)
       } else if (rule.styleSheet) {
@@ -145,25 +162,7 @@ function recurseAndFixRules(cssRules) {
             }
           })
           if (hasVariables) {
-            console.log(rule.style.cssText)
-
-            let cssText = rule.style.cssText.split(';').map(ruleBlip => {
-              let [key, value] = ruleBlip.split(':').map(item => item.trim())
-
-              let color
-              if (key.startsWith('--')) {
-                color = makeColor(key, value)
-              }
-
-              if (key && (color || value)) {
-                return `${key}: ${color || value};`
-              }
-            }).join(' ')
-            rule.style.cssText = cssText
-
-            console.log(cssText)
-
-            // Right now, we're just naively flipping colors. Might be better to see what kinds of things these vars are used for, then decide to flip them or not.
+            variableRules.push(rule)
           }
         } catch (error) {
           console.warn(error)
@@ -177,60 +176,85 @@ function recurseAndFixRules(cssRules) {
   }
 }
 
-function makeColor(style, value, debug = true) {
+function parseVariableRules() {
+  variableRules.forEach(rule => {
+    let cssText = rule.style.cssText.split(';').map(ruleBlip => {
+      let [key, value] = ruleBlip.split(':').map(item => item.trim())
+
+      let color
+      if (variablesUsedFor[key]) {
+        if (variablesUsedFor[key].font) {
+          color = makeColor(key, value, true)
+        } else {
+          color = makeColor(key, value, false)
+        }
+      }
+
+      if (key && (color || value)) {
+        return `${key}: ${color || value};`
+      }
+    }).join(' ')
+    rule.style.cssText = cssText
+  })
+}
+
+const variablesUsedFor = {
+}
+
+function makeColor(style, value, isFont = undefined, debug = false) {
 
   let notInherit = value !== 'inherit'
   let notInitial = value !== 'initial'
   let notCurrentColor = value !== 'currentcolor'
-  let notVariable = value && !value.startsWith('var(--')
+  let valueIsVariable = Boolean(value && value.startsWith('var(--'))
 
-  if (style === '--highlight-bg') {
-    console.log('what_sdf', style, value, notInherit, notInitial, notCurrentColor, notVariable)
+  if (!isFont) {
+    isFont = (style === 'color')
+  }
+
+  // collect information on variables for later
+  if (valueIsVariable) {
+    let trimmedVariable = value.replace(/^var\(/, '').replace(/\)$/, '')
+
+    if (!variablesUsedFor[trimmedVariable]) {
+      variablesUsedFor[trimmedVariable] = {
+        font: 0,
+        ui: 0
+      }
+    }
+    if (isFont) {
+      variablesUsedFor[trimmedVariable].font++
+    } else {
+      variablesUsedFor[trimmedVariable].ui++
+    }
+
+    return
   }
 
   // ignore some values that'll implode
   try {
-    if (value && notInherit && notInitial && notCurrentColor && notVariable) {
-      if (style === 'color') {
-        let color = Color(value)
+    if (value && notInherit && notInitial && notCurrentColor) {
+
+      let color = value || target.style[style]
+      // is font-related, make light
+      if (isFont) {
+        color = Color(color)
         if (color.isDark()) {
-          return color.negate().string()
+          color = color.negate()
+          color = color.lightness(color.lightness() - darkenBy).string()
         }
       }
 
-      else if (
-        (style === 'background-color') ||
-        (style === 'background') ||
-        (style === 'border-color') ||
-        (style === 'border-top-color') ||
-        (style === 'border-right-color') ||
-        (style === 'border-bottom-color') ||
-        (style === 'border-left-color')
-      ) {
-        let color = Color(value || target.style[style])
+      // is ui-related; make dark
+      else {
+        color = Color(color)
         if (color.isLight()) {
           color = color.negate()
-          color = color.lightness(color.lightness() + lightenBy)
-
-          return color.string()
+          color = color.lightness(color.lightness() + lightenBy).string()
         }
       }
 
-      else if (style.startsWith('--')) {
-        let color = Color(value)
-        if (color.isDark()) {
-          return color.negate().string()
-        } else {
-          color = color.negate()
-          color = color.lightness(color.lightness() + lightenBy)
-
-          return color.string()
-        }
-      }
-
-      else if (style === 'box-shadow') {
-        // ugh
-      }
+      return color
     }
   } catch (error) {
     if (debug) {
@@ -241,13 +265,35 @@ function makeColor(style, value, debug = true) {
   return
 }
 
+let totalStylesFixed = 0
 function fixStyle(target, style, value) {
-  value = value || target.style[style]
+  value = value || target.style[style];
 
-  let color = makeColor(style, value)
+  let newValue
+  if (stylesToFix.has(style)) {
+    let rgbHslHwb = '(?:rgb|hsl|hwb)a?\\([^)]*\\)'
+    let hexish = '#\\w{3}\\w?(?:\\w{2})?(?:\\w{2})?'
+    let regex = new RegExp(`(${rgbHslHwb}|${hexish}|\\s+)`);
 
-  if (color) {
-    target.style[style] = color
+    newValue = value.split(regex).map(segment => {
+      let color
+      if (segment.trim()) {
+        try {
+          color = makeColor(style, segment)
+        } catch (e) {
+          // ignore
+        }
+      }
+      return color || segment
+    }).join('')
+  }
+
+  if (newValue) {
+    if (totalStylesFixed < 10) {
+      console.log(target, style, newValue)
+    }
+    target.style[style] = newValue
+    totalStylesFixed ++
     return true
   }
 
