@@ -2,6 +2,7 @@ import "core-js/stable";
 import "regenerator-runtime/runtime";
 import Color from 'color'
 import { onDomChange } from '../../lib/on-dom-change'
+import { isType } from '../../lib/is-type'
 
 const stylesToFix = new Set([
   'color',
@@ -62,23 +63,28 @@ function exclude() {
   return false
 }
 
+let iteration = 0
+
 async function darken() {
   if (!exclude()) {
-    let failed = await darkenViaSheets()
-    parseVariableRules()
+    iteration++
 
-    // if (!failed) {
-    //   recurseAndFixElements(false)
-    // } else {
-    //   console.debug('Failed to load some stylesheets; falling back to manual element changes.')
-    //   recurseAndFixElements()
-    // }
+    let failed = await darkenViaSheets()
+
+    if (!failed) {
+    recurseAndFixElements(false)
+    } else {
+      console.debug('Failed to load some stylesheets; falling back to manual element changes.')
+      recurseAndFixElements()
+    }
 
     ensureBasicColors()
 
     console.debug({ totalStylesFixed })
   }
 }
+
+let sandboxSheet
 
 async function darkenViaSheets() {
   let nullSheets = []
@@ -87,41 +93,67 @@ async function darkenViaSheets() {
   let sheets = []
 
   Array.from(document.styleSheets).forEach((sheet, index) => {
-    try {
-      // so, to make a sheet that we can interact with as an object, we have to insert it into the dom
-      sheets[index] = cloneSheet(sheet)
-      recurseAndFixRules(sheets[index].sheet)
+    // console.log(sheet.ownerNode, sheet)
+    if (sheet.ownerNode && !sheet.ownerNode.getAttribute('created-by-me')) {
+      try {
+        // so, to make a sheet that we can interact with as an object, we have to insert it into the dom
+        sheets[index] = fixSheet(sheetText(sheet), sheet.ownerNode)
 
-      if (sheet.cssRules === null) {
-        throw new Error("Can't read stylesheet.")
+        if (sheet.cssRules === null) {
+          throw new Error("Can't read stylesheet.")
+        }
+      } catch (e) {
+        nullSheets.push(request(sheet.href)
+          .then(async ({ body }) => {
+            sheets[index] = fixSheet(body, sheet.ownerNode)
+          })
+          .catch(reason => {
+            atLeastOneFailure = true
+            console.warn(reason)
+          })
+        )
       }
-    } catch (e) {
-      nullSheets.push(request(sheet.href)
-        .then(async ({ body }) => {
-          sheets[index] = createSheet(body)
-          recurseAndFixRules(sheets[index].sheet)
-        })
-        .catch(reason => {
-          atLeastOneFailure = true
-          console.warn(reason)
-        })
-      )
     }
   })
 
   await Promise.all(nullSheets)
 
-  sheets.forEach(sheetElement => {
-    // console.log(sheetText(sheetElement.sheet))
-    console.log(sheetText(sheetElement.sheet).trim())
-    if (sheetText(sheetElement.sheet).trim()) {
-      cloneSheet(sheetElement.sheet, { replace: sheetElement })
-    } else {
-      sheetElement.parentElement.removeChild(sheetElement)
+  document.querySelectorAll(`[created-by-me="override"]`).forEach(node => {
+    if (node.sheet && node.sheet.iteration !== iteration) {
+      node.parentElement.removeChild(node)
     }
   })
 
+  sheets.forEach(sheet => {
+    if (sheet.body) {
+      createSheet(sheet.body, sheet)
+    }
+  })
+
+  parseVariableRules()
+
   return atLeastOneFailure
+}
+
+function fixSheet(body, ownerNode) {
+  if (!sandboxSheet) {
+    sandboxSheet = createSheet('', { attributes: [{ name: 'created-by-me', value: 'sandbox' }] })
+    sandboxSheet.innerText = ''
+  }
+
+  let attributes = Array.from(ownerNode.attributes)
+
+  sandboxSheet.innerText = body
+
+  recurseAndFixRules(sandboxSheet.sheet)
+  let outputBody = sheetText(sandboxSheet.sheet)
+
+  sandboxSheet.innerText = ''
+
+  return {
+    attributes,
+    body: outputBody
+  }
 }
 
 function sheetText(sheet) {
@@ -132,20 +164,11 @@ function sheetText(sheet) {
   return rules.join('\n')
 }
 
-function cloneSheet(sheet, options = {}) {
-  let rules = []
-  sheet.cssRules.forEach(rule => {
-    rules.push(rule.cssText)
-  })
-  let attributes = Array.from(sheet.ownerNode.attributes)
-  return createSheet(rules.join('\n'), { attributes, ...options })
-}
-
 function createSheet(text, { attributes, replace = false } = {}) {
   let style = document.createElement('style')
   style.innerHTML = text
 
-  style.setAttribute('created-by-me', 'true')
+  style.setAttribute('created-by-me', 'override-sheet')
 
   if (attributes) {
     attributes.forEach(({ name, value }) => {
@@ -157,7 +180,7 @@ function createSheet(text, { attributes, replace = false } = {}) {
     replace.insertAdjacentElement('afterend', style)
     replace.parentElement.removeChild(replace)
   } else {
-    document.head.appendChild(style)
+    document.body.appendChild(style)
   }
   return style
 }
@@ -188,7 +211,7 @@ function recurseAndFixElements(useComputed = true, element = document.body.paren
   let count = 0
 
   Array.from(style).forEach(styleToFix => {
-    let fixed = fixStyle(element, styleToFix, style[styleToFix])
+    let fixed = fixStyle(element, styleToFix, style[styleToFix], false)
     if (count === 0 && fixed) {
       count += 1
     }
@@ -209,10 +232,9 @@ function recurseAndFixRules(sheetish) {
   try {
     let cssRules = sheetish.cssRules
 
-    for (let index = 0, i = 0; index < cssRules.length && i < 1000;) {
+    for (let index = 0, lastRule; index < cssRules.length;) {
       let rule = cssRules[index]
       let increment = true
-      i++
 
       if (/@media (prefers-color-scheme-dark)/.test(rule.cssText)) {
         console.debug('dark-mode', rule)
@@ -221,7 +243,7 @@ function recurseAndFixRules(sheetish) {
       if (rule.cssRules) {
         recurseAndFixRules(rule)
       } else if (rule.styleSheet) {
-        recurseAndFixRules(rule.styleSheet)
+        // recurseAndFixRules(rule.styleSheet)
       } else {
         try {
           let hasVariables = false
@@ -237,10 +259,17 @@ function recurseAndFixRules(sheetish) {
             variableRules.push(rule)
           }
 
-          if (rule.style.length === 0) {
-            increment = false
+          if (rule.style.length === 0 && (
+            !isType(rule, CSSKeyframeRule) // we can't clear keyframe rules entirely, and they don't get merged, so don't do anything with them
+          )) {
+            if (rule !== lastRule) {
+              // if we've tried the same rule multiple times, that's bad. Make sure we move on.
+              increment = false
+            }
             sheetish.deleteRule(index)
           }
+
+          lastRule = rule
 
         } catch (error) {
           console.warn(error)
@@ -253,7 +282,7 @@ function recurseAndFixRules(sheetish) {
     }
   } catch (error) {
     if (sheetish.cssRules !== null) {
-      console.warn(error)
+      console.warn('Error while recursing rules:', sheetish, error)
     }
   }
 }
@@ -356,8 +385,8 @@ function makeColor(style, value, isFont = undefined, debug = false) {
 }
 
 let totalStylesFixed = 0
-function fixStyle(target, style, value) {
-  value = value || target.style[style];
+function fixStyle(target, style, styleValue, clearNotFixed = true) {
+  styleValue = styleValue || target.style[style];
 
   let newValue
   if (stylesToFix.has(style)) {
@@ -365,7 +394,7 @@ function fixStyle(target, style, value) {
     let hexish = '#\\w{3}\\w?(?:\\w{2})?(?:\\w{2})?'
     let regex = new RegExp(`(${rgbHslHwb}|${hexish}|\\s+)`);
 
-    newValue = value.split(regex).map(segment => {
+    newValue = styleValue.split(regex).map(segment => {
       let color
       if (segment.trim()) {
         try {
@@ -379,20 +408,17 @@ function fixStyle(target, style, value) {
   }
 
   if (newValue) {
-    if (totalStylesFixed < 10) {
-      console.debug(target, style, newValue)
-    }
     target.style[style] = newValue
 
     // invert all background images
     // this should mostly miss things like profile pictures, and hopefully just get ui elements... but we'll see
-    if (style === 'background-image' && value.startsWith('url(')) {
+    if (style === 'background-image' && styleValue.startsWith('url(')) {
       target.style.filter = `invert(1)`
     }
 
     totalStylesFixed++
     return true
-  } else {
+  } else if (clearNotFixed) {
     target.style[style] = ''
   }
 
@@ -404,8 +430,3 @@ darken()
 onDomChange(() => {
   // darken()
 })
-
-setTimeout(() => {
-  // console.log('retry')
-  // darken()
-}, 5000)
