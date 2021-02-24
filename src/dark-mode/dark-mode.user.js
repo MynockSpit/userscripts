@@ -24,6 +24,36 @@ const darkenLightsBy = 10;
 const uiHue = undefined;
 const fontHue = undefined;
 
+async function request(url, options) {
+  try {
+    const response = await new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        url,
+        method: 'GET',
+        onload(response) { resolve(response) },
+        onerror(response) { reject(response) }
+      })
+    })
+
+    return {
+      status: response.status,
+      statusText: response.statusText,
+      body: response.responseText,
+      headers: response.responseHeaders
+    }
+  } catch (e) {
+    let response = await fetch(url, options)
+
+    return {
+      status: response.status,
+      statusText: response.statusText,
+      body: await response.text(),
+      headers: response.headers
+    }
+
+  }
+}
+
 function exclude() {
   if (/facebook\.com/.test(window.location.href)) {
     return true
@@ -37,16 +67,16 @@ async function darken() {
     let failed = await darkenViaSheets()
     parseVariableRules()
 
-    if (!failed) {
-      recurseAndFixElements(false)
-    } else {
-      console.debug('Failed to load some stylesheets; falling back to manual element changes.')
-      recurseAndFixElements()
-    }
+    // if (!failed) {
+    //   recurseAndFixElements(false)
+    // } else {
+    //   console.debug('Failed to load some stylesheets; falling back to manual element changes.')
+    //   recurseAndFixElements()
+    // }
 
     ensureBasicColors()
 
-    console.log({ totalStylesFixed })
+    console.debug({ totalStylesFixed })
   }
 }
 
@@ -54,25 +84,22 @@ async function darkenViaSheets() {
   let nullSheets = []
   let atLeastOneFailure = false
 
-  Array.from(document.styleSheets).forEach(sheet => {
-    try {
-      // console.log(sheet)
-    } catch (e) { }
+  let sheets = []
 
+  Array.from(document.styleSheets).forEach((sheet, index) => {
     try {
-      recurseAndFixRules(sheet.cssRules)
+      // so, to make a sheet that we can interact with as an object, we have to insert it into the dom
+      sheets[index] = cloneSheet(sheet)
+      recurseAndFixRules(sheets[index].sheet)
 
       if (sheet.cssRules === null) {
         throw new Error("Can't read stylesheet.")
       }
     } catch (e) {
-      nullSheets.push(fetch(sheet.href)
-        .then(async response => {
-          let text = await response.text()
-
-          let newSheet = createSheet(text, sheet.ownerNode)
-
-          recurseAndFixRules(newSheet.cssRules)
+      nullSheets.push(request(sheet.href)
+        .then(async ({ body }) => {
+          sheets[index] = createSheet(body)
+          recurseAndFixRules(sheets[index].sheet)
         })
         .catch(reason => {
           atLeastOneFailure = true
@@ -84,39 +111,76 @@ async function darkenViaSheets() {
 
   await Promise.all(nullSheets)
 
+  sheets.forEach(sheetElement => {
+    // console.log(sheetText(sheetElement.sheet))
+    console.log(sheetText(sheetElement.sheet).trim())
+    if (sheetText(sheetElement.sheet).trim()) {
+      cloneSheet(sheetElement.sheet, { replace: sheetElement })
+    } else {
+      sheetElement.parentElement.removeChild(sheetElement)
+    }
+  })
+
   return atLeastOneFailure
 }
 
-function createSheet(text, replace) {
+function sheetText(sheet) {
+  let rules = []
+  sheet.cssRules.forEach(rule => {
+    rules.push(rule.cssText)
+  })
+  return rules.join('\n')
+}
+
+function cloneSheet(sheet, options = {}) {
+  let rules = []
+  sheet.cssRules.forEach(rule => {
+    rules.push(rule.cssText)
+  })
+  let attributes = Array.from(sheet.ownerNode.attributes)
+  return createSheet(rules.join('\n'), { attributes, ...options })
+}
+
+function createSheet(text, { attributes, replace = false } = {}) {
   let style = document.createElement('style')
   style.innerHTML = text
+
   style.setAttribute('created-by-me', 'true')
+
+  if (attributes) {
+    attributes.forEach(({ name, value }) => {
+      style.setAttribute(name, value)
+    })
+  }
+
   if (replace) {
     replace.insertAdjacentElement('afterend', style)
     replace.parentElement.removeChild(replace)
   } else {
     document.head.appendChild(style)
   }
-  return style.sheet
+  return style
 }
 
 function ensureBasicColors() {
-  let html = document.body.parentElement
-  let htmlStyle = getComputedStyle(html)
+  let htmlStyle = getComputedStyle(document.body.parentElement)
 
   let bgColor = Color(htmlStyle.backgroundColor)
-
-  html.style.backgroundColor = bgColor
+  let bgColorFinal = bgColor
     .alpha(1)
-    .lightness(bgColor.lightness() + targetDarkness)
+    .lightness(bgColor.lightness() + lightenDarksBy)
     .string()
 
-  console.log(html.style.backgroundColor)
-
+  let color = htmlStyle.color
   let fontColor = Color(htmlStyle.color)
   if (fontColor.isDark()) {
-    html.style.color = 'white'
+    color = 'white'
   }
+
+  createSheet(`html {
+    background-color: ${bgColorFinal};
+    color: ${color};
+  }`)
 }
 
 function recurseAndFixElements(useComputed = true, element = document.body.parentElement) {
@@ -141,17 +205,23 @@ function recurseAndFixElements(useComputed = true, element = document.body.paren
 
 let variableRules = []
 
-function recurseAndFixRules(cssRules) {
+function recurseAndFixRules(sheetish) {
   try {
-    Array.from(cssRules).forEach(rule => {
+    let cssRules = sheetish.cssRules
+
+    for (let index = 0, i = 0; index < cssRules.length && i < 1000;) {
+      let rule = cssRules[index]
+      let increment = true
+      i++
+
       if (/@media (prefers-color-scheme-dark)/.test(rule.cssText)) {
-        console.log(rule)
+        console.debug('dark-mode', rule)
         return
       }
       if (rule.cssRules) {
-        recurseAndFixRules(rule.cssRules)
+        recurseAndFixRules(rule)
       } else if (rule.styleSheet) {
-        recurseAndFixRules(rule.styleSheet.cssRules)
+        recurseAndFixRules(rule.styleSheet)
       } else {
         try {
           let hasVariables = false
@@ -162,16 +232,27 @@ function recurseAndFixRules(cssRules) {
               fixStyle(rule, style)
             }
           })
+
           if (hasVariables) {
             variableRules.push(rule)
           }
+
+          if (rule.style.length === 0) {
+            increment = false
+            sheetish.deleteRule(index)
+          }
+
         } catch (error) {
           console.warn(error)
         }
       }
-    })
+
+      if (increment) {
+        index++
+      }
+    }
   } catch (error) {
-    if (cssRules !== null) {
+    if (sheetish.cssRules !== null) {
       console.warn(error)
     }
   }
@@ -299,7 +380,7 @@ function fixStyle(target, style, value) {
 
   if (newValue) {
     if (totalStylesFixed < 10) {
-      console.log(target, style, newValue)
+      console.debug(target, style, newValue)
     }
     target.style[style] = newValue
 
@@ -311,6 +392,8 @@ function fixStyle(target, style, value) {
 
     totalStylesFixed++
     return true
+  } else {
+    target.style[style] = ''
   }
 
   return false
@@ -321,3 +404,8 @@ darken()
 onDomChange(() => {
   // darken()
 })
+
+setTimeout(() => {
+  // console.log('retry')
+  // darken()
+}, 5000)
